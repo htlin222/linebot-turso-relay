@@ -6,7 +6,7 @@ allowed-tools: Bash(python3 *)
 
 # LINE Inbox
 
-Query the personal LINE message archive captured by [lizard-the-linebot](https://github.com/htlin222/lizard-the-linebot). Storage is a Turso (libSQL) database; reads go via Turso's HTTP pipeline API — no extra Python deps.
+Query the personal LINE message archive captured by [lizard-the-linebot](https://github.com/htlin222/linebot-turso-relay). Storage is a Turso (libSQL) database; reads go via Turso's HTTP pipeline API — no extra Python deps.
 
 ## Path conventions
 

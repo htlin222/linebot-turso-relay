@@ -1,9 +1,20 @@
-# lizard-the-linebot
+# linebot-turso-relay
 
-A personal LINE bot that captures every message you forward to it and writes
-the metadata (sender, timestamp, type, content) to a [Turso](https://turso.tech)
-(libSQL) database. Runs on Cloudflare Workers — free tier is plenty for
-personal volume.
+> 🇹🇼 中文版：[README.zh-tw.md](README.zh-tw.md)
+
+A LINE bot that captures every message you forward to it and relays the
+metadata (sender, timestamp, type, content) into a [Turso](https://turso.tech)
+(libSQL) database. Runs on Cloudflare Workers — the free tier is plenty for
+personal volume. Binary attachments (image/video/audio/file) are streamed to
+an R2 bucket.
+
+The name says what it does: **LINE bot → Turso relay**. Everything else — the
+webhook, the R2 archival, the Claude Code skills — hangs off that one idea.
+
+> **Naming:** this repo ships a *reference deployment* whose Worker is called
+> `lizard-the-linebot`, whose bot is `lizard-inbox`, and whose DB is `lizard`.
+> Those are just example names — pick your own when you deploy. The commands
+> below use the reference names so you have something concrete to copy.
 
 > 📓 **Project notebook:** see [`docs/`](docs/00-overview.md) for IMRaD-styled
 > notes on the protocol quirks, schema choices, runtime tradeoffs, the
@@ -25,17 +36,19 @@ shallow, *Keep* is fiddly, and nothing leaves LINE in a form another
 program can read.
 
 **This bot turns LINE into an inbox you own.** Forward anything (text,
-sticker, location, file, image) to `lizard-inbox`; the webhook writes a row
+sticker, location, file, image) to your bot; the webhook writes a row
 to a Turso (libSQL) database within ~2 seconds. The LINE side is just
 capture — the DB is the integration surface.
 
-**Once it's in SQL, an agent can read it.** A Claude Code skill
-([`.claude/skills/line-inbox`](.claude/skills/line-inbox/SKILL.md)) ships
-with this repo and queries the table directly, so prompts like *"pull the
-dates I forwarded this week and add them to my calendar"* or *"turn the
-asks in my Friday forwards into todos"* work end-to-end. The agent
-extracts dates, names, and action items from the rows and hands them off
-to whatever scheduling / todo tool you've wired up.
+**Once it's in SQL, an agent can read it.** Two Claude Code skills ship with
+this repo: [`line-inbox`](.claude/skills/line-inbox/SKILL.md) (read side —
+search/list/count the archive) and [`line`](.claude/skills/line/SKILL.md)
+(write side — resolve a display name to a userId and push a message back out).
+They query the table directly, so prompts like *"pull the dates I forwarded
+this week and add them to my calendar"* or *"turn the asks in my Friday
+forwards into todos"* work end-to-end. The agent extracts dates, names, and
+action items from the rows and hands them off to whatever scheduling / todo
+tool you've wired up.
 
 You keep using LINE the way you already do — your forwards just become
 queryable, agent-readable, and yours.
@@ -52,15 +65,14 @@ LINE forward  →  webhook  →  your own DB  →  agent  →  calendar / todos 
 ```
 ┌─────────┐   forward   ┌──────────────┐   webhook   ┌────────────────────┐
 │  LINE   ├────────────▶│ LINE Platform├────────────▶│ Cloudflare Worker  │
-│ on phone│             │              │   (POST)    │  (lizard-the-      │
-└─────────┘             └──────────────┘             │   linebot)         │
-      ▲                        │                     │                    │
-      │  "蜥蜴已收到🦎"             │                     │ 1. verify HMAC     │
-      │  (only when            │                     │ 2. resolve display │
-      │   @-mentioned          │                     │    name (LINE API) │
-      │   in a group)          │  reply API          │ 3. INSERT row      │
-      └────────────────────────┤◀────────────────────┤ 4. ack iff mention │
-                                                     └─────────┬──────────┘
+│ on phone│             │              │   (POST)    │                    │
+└─────────┘             └──────────────┘             │                    │
+      ▲                        │                     │ 1. verify HMAC     │
+      │  "ack reply"           │                     │ 2. resolve display │
+      │  (only when            │                     │    name (LINE API) │
+      │   @-mentioned          │  reply API          │ 3. INSERT row      │
+      │   in a group)          │◀────────────────────┤ 4. ack iff mention │
+      └────────────────────────┤                     └─────────┬──────────┘
                                                                │
                                                                ▼
                                                      ┌────────────────────┐
@@ -77,7 +89,7 @@ For each `POST /webhook`:
    - Map the event to a row (text/sticker/file/location have type-specific columns; everything is also dumped into `raw_payload` as JSON).
    - Call `GET /v2/bot/profile/{userId}` to resolve the sender's display name.
    - `INSERT … ON CONFLICT(webhook_event_id) DO NOTHING` — idempotent against LINE redeliveries.
-   - If the bot was @-mentioned (group/room only), send "蜥蜴已收到🦎" via `POST /v2/bot/message/reply` (after the 200, via `ctx.waitUntil`).
+   - If the bot was @-mentioned (group/room only), send the ack reply via `POST /v2/bot/message/reply` (after the 200, via `ctx.waitUntil`).
 4. Return `200 ok`.
 
 Unknown event types (follow, unfollow, postback, etc.) are silently skipped.
@@ -85,13 +97,13 @@ Unknown event types (follow, unfollow, postback, etc.) are silently skipped.
 ### What gets saved & when does it reply
 
 Every message that hits the webhook is saved to the DB (full archive).
-The reply (`蜥蜴已收到🦎`) is gated separately — only fires when the bot is explicitly @-mentioned in a group/room. DMs stay silent too, so the bot never speaks unless directly summoned.
+The ack reply is gated separately — it only fires when the bot is explicitly @-mentioned in a group/room. DMs stay silent too, so the bot never speaks unless directly summoned.
 
 | Where | Saved? | Reply? |
 |---|---|---|
 | 1:1 DM | ✅ | ❌ silent |
 | Group / room, any message | ✅ | ❌ silent |
-| Group / room, @lizard mentioned | ✅ | ✅ |
+| Group / room, @bot mentioned | ✅ | ✅ |
 | Group / room, `@all` | ✅ | ❌ silent (intentional — no group-ping spam) |
 
 The reply gate is `shouldReply()` at the bottom of `src/index.ts` — checks `event.message.mention.mentionees[].isSelf`.
@@ -100,7 +112,7 @@ To receive group events at all, **Allow bot to join group chats** must be **Enab
 
 ### Binary attachments → R2
 
-For `image`, `video`, `audio`, and `file` messages, the worker also pulls the bytes from LINE (`GET /v2/bot/message/{id}/content`) and stashes them in the `lizard-attachments` R2 bucket — keyed as `YYYY-MM/<messageId>`, with `Content-Type` preserved. The DB row's `r2_key` column gets the key. LINE only keeps content for ~7 days, so this is a one-shot capture. The download runs in `ctx.waitUntil()` so the webhook still 200s in ~milliseconds.
+For `image`, `video`, `audio`, and `file` messages, the worker also pulls the bytes from LINE (`GET /v2/bot/message/{id}/content`) and stashes them in an R2 bucket (the reference deployment calls it `lizard-attachments`) — keyed as `YYYY-MM/<messageId>`, with `Content-Type` preserved. The DB row's `r2_key` column gets the key. LINE only keeps content for ~7 days, so this is a one-shot capture. The download runs in `ctx.waitUntil()` so the webhook still 200s in ~milliseconds.
 
 ### Quote-reply (replying to a previous message)
 
@@ -114,9 +126,29 @@ python3 .claude/skills/line-inbox/scripts/inbox.py mentions
 
 ---
 
+## Quick start (end-to-end)
+
+A [`Makefile`](Makefile) wraps the whole path from clone to deployed webhook.
+Run `make help` to see every target. The happy path:
+
+```bash
+make install         # pnpm install
+make env             # scaffold .env / .dev.vars from the examples
+#   → edit .env with your 4 secrets, then:
+make db              # create the Turso DB + apply schema/*.sql
+make secrets         # push the 4 secrets into Cloudflare
+make r2              # create the R2 attachments bucket
+make deploy          # wrangler deploy
+make url             # print the webhook URL to paste into LINE Console
+```
+
+Then paste `<worker-url>/webhook` into **LINE Console → Messaging API → Webhook URL**, click **Verify**, and forward a message to test. `make tail` streams live logs.
+
+---
+
 ## What gets deployed
 
-After setup you'll have something like:
+After setup you'll have something like (names are the reference deployment's — swap in your own):
 
 | Thing | Example |
 |---|---|
@@ -134,7 +166,7 @@ Local secrets live in `.env` and `.dev.vars` (both gitignored).
 
 ## Daily use
 
-Forward any message to `lizard-inbox` from your LINE app. The bot stays silent (DMs no longer auto-ack) but the row lands in Turso within ~2s. To inspect what landed:
+Forward any message to your bot from your LINE app. The bot stays silent (DMs no longer auto-ack) but the row lands in Turso within ~2s. To inspect what landed:
 
 ```bash
 # Last 20
@@ -150,6 +182,8 @@ turso db shell lizard "SELECT message_type, text FROM messages WHERE date(line_t
 turso db shell lizard "SELECT id, datetime(line_timestamp_ms/1000,'unixepoch','+8 hours') AS at, text FROM messages WHERE text LIKE '%KEYWORD%' ORDER BY id DESC;"
 ```
 
+Or let the `line-inbox` skill do it for you from a Claude Code prompt.
+
 ---
 
 ## Debugging
@@ -157,14 +191,14 @@ turso db shell lizard "SELECT id, datetime(line_timestamp_ms/1000,'unixepoch','+
 **Live tail of worker logs:**
 
 ```bash
-pnpm dlx wrangler tail
+pnpm dlx wrangler tail      # or: make tail
 ```
 
 This streams every request hitting the worker — including LINE's webhook
 calls — with status codes, exceptions, and your `console.log`/`console.error`
 output. Leave it running while you forward a test message.
 
-**Cloudflare dashboard:** <https://dash.cloudflare.com/> → Workers → `lizard-the-linebot` → **Observability** has a request log and metrics for the last 24h.
+**Cloudflare dashboard:** <https://dash.cloudflare.com/> → Workers → your worker → **Observability** has a request log and metrics for the last 24h.
 
 **Common failure modes:**
 
@@ -192,18 +226,18 @@ printf '%s' "NEW_VALUE" | pnpm dlx wrangler secret put LINE_CHANNEL_SECRET
 
 ### Change the ack reply
 
-`src/index.ts` — search for `"蜥蜴已收到🦎"`. Whatever string you put there is sent back to LINE. Limit ~2000 chars.
+`src/index.ts` — search for the ack string. Whatever string you put there is sent back to LINE when the bot is @-mentioned. Limit ~2000 chars.
 
 ### Capture additional fields
 
 `src/types.ts` adds the type, `src/extract.ts` reads it into a column, `src/db.ts`'s `INSERT_SQL` writes it. Add the column with a new migration in `schema/`:
 
 ```sql
--- schema/002_add_xxx.sql
+-- schema/004_add_xxx.sql
 ALTER TABLE messages ADD COLUMN xxx TEXT;
 ```
 
-Apply with `turso db shell lizard < schema/002_add_xxx.sql`. The
+Apply with `turso db shell lizard < schema/004_add_xxx.sql`. The
 `raw_payload` column already has the full event JSON, so historical rows can
 be backfilled with a `UPDATE … SET xxx = json_extract(raw_payload, '$.…')` pass.
 
@@ -222,7 +256,7 @@ Workers run on every Cloudflare edge — there's nothing to change. The Turso DB
 
 ### Allowlist your own userId only
 
-Right now anyone who friends `lizard-inbox` can write to your DB (low risk: the bot URL isn't public, but still). Add at the top of the `for (const event…)` loop in `src/index.ts`:
+Right now anyone who friends the bot can write to your DB (low risk: the bot URL isn't public, but still). Add at the top of the `for (const event…)` loop in `src/index.ts`:
 
 ```ts
 const ALLOWED = new Set(["U_your_user_id_here"]);
@@ -236,7 +270,7 @@ Get your userId from any row that already landed: `SELECT DISTINCT source_user_i
 ## Redeploy
 
 ```bash
-pnpm dlx wrangler deploy
+pnpm dlx wrangler deploy      # or: make deploy
 ```
 
 That's it. The worker uploads (~2s), Cloudflare flips traffic atomically, no downtime. To roll back:
@@ -251,13 +285,18 @@ pnpm dlx wrangler rollback <version-id>
 ## Local development
 
 ```bash
-pnpm install
-cp .env.example .env                 # then fill in the 4 values
-cp .env .dev.vars                    # wrangler reads .dev.vars locally
-pnpm dev                             # http://localhost:8787
+make install                         # pnpm install
+make env                             # cp the .example files, then fill in the 4 values
+pnpm dev                             # http://localhost:8787   (or: make dev)
 ```
 
 Send a signed test request:
+
+```bash
+make dev-test        # signs BODY='{"destination":"U0","events":[]}' and curls localhost
+```
+
+or by hand:
 
 ```bash
 SECRET=$(grep '^LINE_CHANNEL_SECRET=' .env | cut -d= -f2-)
@@ -284,7 +323,10 @@ src/extract.ts      LINE event → DB row
 src/types.ts        minimal LINE webhook types
 schema/             SQL migrations (apply with turso db shell <db> < file)
 wrangler.toml       Worker config (no secrets)
+Makefile            end-to-end setup / deploy / debug targets
 .env / .dev.vars    local secrets (gitignored)
+.claude/skills/     line-inbox (read) + line (write) Claude Code skills
+docs/               IMRaD project notebook
 ```
 
 ---
@@ -294,3 +336,9 @@ wrangler.toml       Worker config (no secrets)
 - **Cloudflare Workers free**: 100k requests/day. A personal forwarder is nowhere close.
 - **Turso free**: 9 GB storage, 1B row reads / 25M writes per month. Same — comfortable.
 - **LINE Messaging API free tier**: 200 *push* messages/month. Replies (which is what we use) don't count against this. So free.
+
+---
+
+## License
+
+[MIT](LICENSE).

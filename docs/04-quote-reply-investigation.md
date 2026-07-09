@@ -59,7 +59,7 @@ design space narrowed:
   original isn't in our DB. Rejected: a row containing only an opaque
   ID with no recoverable text is essentially useless.
 - **Save everything in groups** — flip the ingestion rule. Accepted.
-  See [commit `41f8366`](https://github.com/htlin222/lizard-the-linebot/commit/41f8366).
+  See [commit `41f8366`](https://github.com/htlin222/linebot-turso-relay/commit/41f8366).
 
 To keep the chat itself quiet, *reply* gating was decoupled from
 *ingestion* gating: every message is saved, but the

@@ -6,7 +6,7 @@ allowed-tools: Bash(python3 *)
 
 # LINE bot operations
 
-Outbound + API operations for [lizard-the-linebot](https://github.com/htlin222/lizard-the-linebot). The bot captures forwarded messages into a Turso DB (read side = the **line-inbox** skill); this skill covers acting back out through LINE's Messaging API.
+Outbound + API operations for [lizard-the-linebot](https://github.com/htlin222/linebot-turso-relay). The bot captures forwarded messages into a Turso DB (read side = the **line-inbox** skill); this skill covers acting back out through LINE's Messaging API.
 
 ## Credentials
 
@@ -36,7 +36,7 @@ You can only push to a `U…` userId, and display names are neither unique nor s
 python3 "$REPO/.claude/skills/line-inbox/scripts/inbox.py" --json sql \
   "SELECT source_user_id, user_display_name, COUNT(*) AS n,
           MAX(datetime(line_timestamp_ms/1000,'unixepoch','+8 hours')) AS last_seen
-   FROM messages WHERE user_display_name='林協霆'
+   FROM messages WHERE user_display_name='<display-name>'
    GROUP BY source_user_id ORDER BY n DESC"
 ```
 

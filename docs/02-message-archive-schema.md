@@ -56,5 +56,5 @@ silently returns NULL because `strftime` returns TEXT and SQLite
 refuses the implicit comparison. Always wrap with
 `CAST(strftime('%s', …) AS INTEGER)` when comparing against
 millisecond/epoch integer columns. We hit this once
-([commit `1b3196e`](https://github.com/htlin222/lizard-the-linebot/commit/1b3196e))
+([commit `1b3196e`](https://github.com/htlin222/linebot-turso-relay/commit/1b3196e))
 and now document it on every time-window query in the skill.
