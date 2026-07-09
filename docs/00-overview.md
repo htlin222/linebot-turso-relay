@@ -23,6 +23,7 @@ Discussion) so the *why* and *how-we-verified* survive alongside the
 | [05](05-claude-code-skill-portability.md) | Project-local Claude Code skill | Cred precedence, symlink mirror, gitignore strategy |
 | [06](06-distilled-principles.md) | **Distilled architectural principles** | Project-agnostic patterns abstracted from 01–05 — read this first if you're starting a new integration |
 | [07](07-further-exploration.md) | Further exploration & learning path | Where to go from here — scale, security, similar projects, real-world parallels, experiment ladder |
+| [08](08-line-official-account-setup.md) | **LINE Official Account setup (how-to)** | Step-by-step (EN + 中文): create the OA, enable Messaging API, get the secrets, wire the webhook — the prequel to the README |
 
 ## Status snapshot
 

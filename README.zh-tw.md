@@ -125,6 +125,12 @@ python3 .claude/skills/line-inbox/scripts/inbox.py mentions
 
 ## 快速開始（端到端）
 
+**步驟 0 — LINE 那一側。** 在這一切能動之前，你需要一個開通了 Messaging API 的
+LINE 官方帳號。若還沒有，照
+[`docs/08-line-official-account-setup.md`](docs/08-line-official-account-setup.md)
+（逐步教學，中英雙語）把它建起來，並拿到你的 `LINE_CHANNEL_SECRET` 與
+`LINE_CHANNEL_ACCESS_TOKEN`。
+
 一份 [`Makefile`](Makefile) 把從 clone 到 webhook 上線的整條路徑都包了起來。
 執行 `make help` 看所有 target。順順的路徑：
 

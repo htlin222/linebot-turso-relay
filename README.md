@@ -128,6 +128,12 @@ python3 .claude/skills/line-inbox/scripts/inbox.py mentions
 
 ## Quick start (end-to-end)
 
+**Step 0 — the LINE side.** You need a LINE Official Account with the Messaging
+API enabled before any of this works. If you don't have one yet, follow
+[`docs/08-line-official-account-setup.md`](docs/08-line-official-account-setup.md)
+(step-by-step, EN + 中文) to create it and get your `LINE_CHANNEL_SECRET` +
+`LINE_CHANNEL_ACCESS_TOKEN`.
+
 A [`Makefile`](Makefile) wraps the whole path from clone to deployed webhook.
 Run `make help` to see every target. The happy path:
 
