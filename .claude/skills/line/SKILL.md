@@ -1,12 +1,12 @@
 ---
 name: line
-description: Operate the lizard-the-linebot LINE bot from the CLI — resolve a person's display name to their LINE userId from the Turso archive, then send (push) a message to them, plus the supporting Messaging API operations (profile lookup, binary content download, reply context). Use when the user wants to "send/push a LINE message", "message <name> on LINE", "tell <someone> via the bot", "推訊息給某人", "用 lizard 發 LINE", "查某人的 LINE userId", or otherwise act *outbound* through the bot. For read-only querying of the archive (search/list/count forwarded messages) use the line-inbox skill instead.
+description: Operate the linebot-turso-relay LINE bot from the CLI — resolve a person's display name to their LINE userId from the Turso archive, then send (push) a message to them, plus the supporting Messaging API operations (profile lookup, binary content download, reply context). Use when the user wants to "send/push a LINE message", "message <name> on LINE", "tell <someone> via the bot", "推訊息給某人", "用 lizard 發 LINE", "查某人的 LINE userId", or otherwise act *outbound* through the bot. For read-only querying of the archive (search/list/count forwarded messages) use the line-inbox skill instead.
 allowed-tools: Bash(python3 *)
 ---
 
 # LINE bot operations
 
-Outbound + API operations for [lizard-the-linebot](https://github.com/htlin222/linebot-turso-relay). The bot captures forwarded messages into a Turso DB (read side = the **line-inbox** skill); this skill covers acting back out through LINE's Messaging API.
+Outbound + API operations for [linebot-turso-relay](https://github.com/htlin222/linebot-turso-relay). The bot captures forwarded messages into a Turso DB (read side = the **line-inbox** skill); this skill covers acting back out through LINE's Messaging API.
 
 ## Credentials
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Query the lizard-the-linebot Turso DB from anywhere."""
+"""Query the linebot-turso-relay Turso DB from anywhere."""
 
 from __future__ import annotations
 

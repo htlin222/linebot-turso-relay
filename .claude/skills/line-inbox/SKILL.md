@@ -1,12 +1,12 @@
 ---
 name: line-inbox
-description: Query the user's personal LINE message archive — every message they forwarded to the lizard-inbox LINE bot is stored in a Turso DB by lizard-the-linebot. Use when the user asks "what did I forward", "search my LINE archive/inbox", "latest line message", "上週 forward 給 lizard 的訊息", "我存到 lizard 的東西", "翻一下我的 LINE 收藏", "what's in my line bot db", or wants to list/search/count/inspect captured LINE messages.
+description: Query the user's personal LINE message archive — every message they forwarded to the lizard-inbox LINE bot is stored in a Turso DB by linebot-turso-relay. Use when the user asks "what did I forward", "search my LINE archive/inbox", "latest line message", "上週 forward 給 lizard 的訊息", "我存到 lizard 的東西", "翻一下我的 LINE 收藏", "what's in my line bot db", or wants to list/search/count/inspect captured LINE messages.
 allowed-tools: Bash(python3 *)
 ---
 
 # LINE Inbox
 
-Query the personal LINE message archive captured by [lizard-the-linebot](https://github.com/htlin222/linebot-turso-relay). Storage is a Turso (libSQL) database; reads go via Turso's HTTP pipeline API — no extra Python deps.
+Query the personal LINE message archive captured by [linebot-turso-relay](https://github.com/htlin222/linebot-turso-relay). Storage is a Turso (libSQL) database; reads go via Turso's HTTP pipeline API — no extra Python deps.
 
 ## Path conventions
 

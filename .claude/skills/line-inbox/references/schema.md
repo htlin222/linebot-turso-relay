@@ -1,6 +1,6 @@
 # `messages` table schema
 
-Source of truth: [`schema/001_init.sql`](https://github.com/htlin222/linebot-turso-relay/blob/main/schema/001_init.sql) in lizard-the-linebot.
+Source of truth: [`schema/001_init.sql`](https://github.com/htlin222/linebot-turso-relay/blob/main/schema/001_init.sql) in linebot-turso-relay.
 
 | column | type | notes |
 |---|---|---|
