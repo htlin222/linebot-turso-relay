@@ -3,7 +3,8 @@
 # Override the reference names on the command line, e.g.
 #   make deploy DB=mybot R2_BUCKET=mybot-attachments
 #
-# Secrets never live here — they are read from .env (gitignored) at push time.
+# Secrets never live here — they are read from .env (gitignored) at push time;
+# op://... values in .env are resolved through the 1Password CLI (`op read`).
 
 # ---- Config (override on the CLI) -------------------------------------------
 DB         ?= lizard
@@ -60,6 +61,7 @@ r2: ## Create the R2 attachments bucket (idempotent)
 secrets: check-env ## Push the 4 secrets from .env into Cloudflare
 	@for k in $(SECRETS); do \
 	  v=$$(grep "^$$k=" .env | cut -d= -f2-); \
+	  case "$$v" in op://*) v=$$(op read --no-newline "$$v") || exit 1;; esac; \
 	  printf '%s' "$$v" | $(WRANGLER) secret put $$k; \
 	done
 	@echo "secrets pushed to Cloudflare"
@@ -76,6 +78,7 @@ dev: ## Run the worker locally (http://localhost:8787), reads .dev.vars
 .PHONY: dev-test
 dev-test: ## Send a signed empty-events webhook to localhost:8787 (expect 200)
 	@SECRET=$$(grep '^LINE_CHANNEL_SECRET=' .env | cut -d= -f2-); \
+	case "$$SECRET" in op://*) SECRET=$$(op read --no-newline "$$SECRET") || exit 1;; esac; \
 	BODY='{"destination":"U0","events":[]}'; \
 	SIG=$$(printf '%s' "$$BODY" | openssl dgst -sha256 -hmac "$$SECRET" -binary | base64); \
 	curl -i -X POST http://localhost:8787/webhook \
