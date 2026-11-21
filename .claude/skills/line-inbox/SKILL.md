@@ -25,7 +25,7 @@ Credentials are looked up in this order:
 
 File paths win over shell env vars on purpose — the user has another Turso DB exported globally, so reading env first would silently hit the wrong DB.
 
-The skill-local `.env` only needs the Turso pair (LINE keys aren't used here). The skill folder ships its own `.gitignore` to keep `.env` and `__pycache__/` out of any repo it lives in.
+The skill-local `.env` only needs the Turso pair. The `pull` subcommand additionally wants `LINE_CHANNEL_ACCESS_TOKEN` — it's read from `LINE_INBOX_ENV` → skill `.env` → project `.dev.vars` → project `.env` → shell env (first hit wins). The skill folder ships its own `.gitignore` to keep `.env`, `__pycache__/`, and the local `media/` cache out of any repo it lives in.
 
 ## Invocation
 
@@ -33,7 +33,7 @@ The skill-local `.env` only needs the Turso pair (LINE keys aren't used here). T
 python3 "${CLAUDE_SKILL_DIR}/scripts/inbox.py" [--json] <subcommand> [args]
 ```
 
-Subcommands: `latest`, `today`, `search`, `count`, `since`, `get`, `mentions`, `attachments`, `sql`. Default output is a fixed-width table; `--json` emits JSON.
+Subcommands: `latest`, `today`, `search`, `count`, `since`, `get`, `mentions`, `attachments`, `pull`, `sql`. Default output is a fixed-width table; `--json` emits JSON.
 
 ## References (load on demand)
 
@@ -90,7 +90,24 @@ python3 "${CLAUDE_SKILL_DIR}/scripts/inbox.py" attachments --missing    # only r
 
 `image`/`video`/`audio`/`file` messages have their bytes pulled into the `lizard-attachments` R2 bucket at key `YYYY-MM/<messageId>` — `r2_key` on the row points at the object. `--missing` finds rows where the download didn't land (transient failure, or the message arrived before R2 archival was deployed). Within the LINE 7-day content-retention window, missing rows can be retro-fetched; after that they're gone.
 
-To download the bytes locally — `<bucket>/<key>` is a single slash-joined arg, and `--remote` is required to hit the production bucket (otherwise wrangler looks in its local cache):
+### Pull binary content to the local cache
+
+```bash
+python3 "${CLAUDE_SKILL_DIR}/scripts/inbox.py" pull 1225            # one message by DB id
+python3 "${CLAUDE_SKILL_DIR}/scripts/inbox.py" pull --since "-7 days"  # mirror a window
+python3 "${CLAUDE_SKILL_DIR}/scripts/inbox.py" pull --open 1225     # + open in default app
+```
+
+`pull` downloads to `${CLAUDE_SKILL_DIR}/media/<YYYY-MM>/<messageId>.<ext>` (gitignored) and is **idempotent** — an already-cached file is returned as `source: "cache"` without re-fetching, so this is how you "keep one local copy". Fetch order per message:
+
+1. **LINE content API** (`api-data.line.me`, needs `LINE_CHANNEL_ACCESS_TOKEN`) — fast, but only works inside LINE's ~7-day retention window. `source: "line-api"`.
+2. **R2 fallback** (`pnpm dlx wrangler r2 object get`, needs Cloudflare auth) — authoritative and all-time, used when LINE 404s (message older than 7 days). `source: "r2"`.
+
+So recent forwards pull instantly via LINE; older ones need working R2 access. **R2 needs Cloudflare credentials that aren't in the skill `.env`** — if wrangler auth is stale you'll see `Invalid access token [code: 9109]`; run `pnpm dlx wrangler login` (or drop a Cloudflare API token where wrangler can see it). Until then, only ≤7-day images are pullable. Bulk `pull` never aborts on one failure — each row reports its own `source: "error"` with the reason.
+
+**Note:** the relay worker already archives every attachment to R2 automatically on arrival — there is no way to auto-save to *this machine* (the worker runs on Cloudflare). `pull` is the read-side mirror of that durable R2 copy onto local disk.
+
+To grab R2 bytes by hand instead — `<bucket>/<key>` is a single slash-joined arg, and `--remote` is required to hit the production bucket (otherwise wrangler looks in its local cache):
 
 ```bash
 pnpm dlx wrangler r2 object get "lizard-attachments/$R2_KEY" --remote --file ./local-name

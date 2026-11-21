@@ -10,4 +10,7 @@ dist/
 *.log
 .DS_Store
 __pycache__/
+
+# symlink to Mail repo calendar skill (machine-local absolute path)
+.claude/skills/calendar
 .dev.vars.tpl

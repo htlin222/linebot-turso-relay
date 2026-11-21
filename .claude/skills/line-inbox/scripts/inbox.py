@@ -7,6 +7,8 @@ import argparse
 import json
 import os
 import pathlib
+import shutil
+import subprocess
 import sys
 import urllib.error
 import urllib.request
@@ -17,6 +19,12 @@ SKILL_ENV = SKILL_ROOT / ".env"
 # Path(__file__).resolve() follows symlinks, so this stays correct even when the
 # skill folder is symlinked in from another repo.
 PROJECT_ENV = SKILL_ROOT.parents[2] / ".env"
+# .dev.vars sits next to the project .env and holds the LINE channel token the
+# relay worker uses; `pull` reuses it to hit LINE's content API.
+PROJECT_DEV_VARS = SKILL_ROOT.parents[2] / ".dev.vars"
+# Local cache for pulled binary content — mirrors the R2 YYYY-MM/<messageId>
+# layout. Gitignored; keeps a durable local copy so re-views are instant.
+MEDIA_ROOT = SKILL_ROOT / "media"
 
 
 def load_creds() -> tuple[str, str]:
@@ -49,7 +57,7 @@ def load_creds() -> tuple[str, str]:
         url = env.get("TURSO_DATABASE_URL", "")
         token = env.get("TURSO_AUTH_TOKEN", "")
         if url and token:
-            return _to_https(url), token
+            return _to_https(url), _op_resolve(token)
 
     url = os.environ.get("TURSO_DATABASE_URL", "")
     token = os.environ.get("TURSO_AUTH_TOKEN", "")
@@ -59,6 +67,20 @@ def load_creds() -> tuple[str, str]:
         f"no creds: put TURSO_DATABASE_URL + TURSO_AUTH_TOKEN in "
         f"{SKILL_ENV} or {PROJECT_ENV}, or set LINE_INBOX_ENV=/path/to/.env"
     )
+
+
+def _op_resolve(value: str) -> str:
+    """Resolve a 1Password `op://` secret reference via the `op` CLI; plain values pass through."""
+    if not value.startswith("op://"):
+        return value
+    try:
+        r = subprocess.run(["op", "read", "--no-newline", value],
+                           capture_output=True, text=True, timeout=120)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        sys.exit(f"cannot resolve {value} with 1Password CLI: {e}")
+    if r.returncode != 0:
+        sys.exit(f"op read {value} failed: {r.stderr.strip()}")
+    return r.stdout
 
 
 def _to_https(url: str) -> str:
@@ -240,6 +262,151 @@ def cmd_attachments(args):
     return execute(sql, [args.n])
 
 
+def _read_env_key(path: pathlib.Path, key: str) -> str | None:
+    if not path.exists():
+        return None
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        if k.strip() == key and v.strip():
+            return v.strip()
+    return None
+
+
+def load_line_token() -> str | None:
+    """LINE_CHANNEL_ACCESS_TOKEN, searched in the same spirit as the Turso creds:
+    explicit override → skill .env → project .dev.vars → project .env → shell env."""
+    candidates: list[pathlib.Path] = []
+    override = os.environ.get("LINE_INBOX_ENV")
+    if override:
+        candidates.append(pathlib.Path(override))
+    candidates += [SKILL_ENV, PROJECT_DEV_VARS, PROJECT_ENV]
+    for path in candidates:
+        tok = _read_env_key(path, "LINE_CHANNEL_ACCESS_TOKEN")
+        if tok:
+            return _op_resolve(tok)
+    return os.environ.get("LINE_CHANNEL_ACCESS_TOKEN") or None
+
+
+LINE_CONTENT_URL = "https://api-data.line.me/v2/bot/message/{}/content"
+_EXT_BY_TYPE = {"image": ".jpg", "video": ".mp4", "audio": ".m4a"}
+_BINARY_TYPES = ("image", "video", "audio", "file")
+
+
+def _ext_for(mtype: str, file_name: str | None) -> str:
+    if mtype == "file" and file_name and "." in file_name:
+        return "." + file_name.rsplit(".", 1)[1].lower()
+    return _EXT_BY_TYPE.get(mtype, ".bin")
+
+
+def _cache_path(row: dict) -> pathlib.Path:
+    mid = row["message_id"]
+    ext = _ext_for(row["message_type"], row.get("file_name"))
+    # Prefer the R2 key's YYYY-MM prefix so local layout mirrors the bucket;
+    # fall back to the message's own month when it was never archived.
+    month = (row.get("r2_key") or "").split("/")[0] or row.get("ym") or "unknown"
+    return MEDIA_ROOT / month / f"{mid}{ext}"
+
+
+def _fetch_line(mid: str, dest: pathlib.Path, token: str) -> bool:
+    """LINE content API — fast, but only within the ~7-day retention window."""
+    req = urllib.request.Request(
+        LINE_CONTENT_URL.format(mid), headers={"Authorization": f"Bearer {token}"}
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            data = r.read()
+    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError):
+        return False  # 404 => outside retention; caller falls back to R2
+    if not data:
+        return False
+    dest.write_bytes(data)
+    return True
+
+
+def _fetch_r2(r2_key: str, dest: pathlib.Path) -> tuple[bool, str]:
+    """R2 via wrangler — authoritative, all-time, but needs Cloudflare auth."""
+    if not shutil.which("pnpm"):
+        return False, "pnpm not found"
+    proc = subprocess.run(
+        ["pnpm", "dlx", "wrangler", "r2", "object", "get",
+         f"lizard-attachments/{r2_key}", "--remote", "--file", str(dest)],
+        capture_output=True, text=True,
+    )
+    if proc.returncode == 0 and dest.exists() and dest.stat().st_size > 0:
+        return True, "r2"
+    return False, (proc.stderr or proc.stdout or "").strip()[:200]
+
+
+def _pull_one(row: dict, token: str | None) -> dict:
+    """Ensure a local copy of one binary message exists. Never raises —
+    returns a status dict so bulk pulls can keep going past failures."""
+    mtype = row["message_type"]
+    if mtype not in _BINARY_TYPES:
+        return {"id": row["id"], "source": "error",
+                "error": f"'{mtype}' has no binary content"}
+    dest = _cache_path(row)
+    if dest.exists() and dest.stat().st_size > 0:
+        return {"id": row["id"], "path": str(dest), "source": "cache",
+                "bytes": dest.stat().st_size}
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    mid = row["message_id"]
+    if token and _fetch_line(mid, dest, token):
+        return {"id": row["id"], "path": str(dest), "source": "line-api",
+                "bytes": dest.stat().st_size}
+    r2_key = row.get("r2_key")
+    if r2_key:
+        ok, info = _fetch_r2(r2_key, dest)
+        if ok:
+            return {"id": row["id"], "path": str(dest), "source": "r2",
+                    "bytes": dest.stat().st_size}
+        return {"id": row["id"], "source": "error",
+                "error": f"LINE unavailable (>7d?) and R2 failed: {info}"}
+    return {"id": row["id"], "source": "error",
+            "error": "LINE content gone (>7d) and no r2_key to fall back on"}
+
+
+def cmd_pull(args):
+    """Download binary content to the local media cache.
+
+    `pull <id>` grabs one message; `pull --since WHEN` (or bare `pull`) mirrors
+    every image/video/audio/file row in the window, skipping ones already cached.
+    """
+    ym = "strftime('%Y-%m', line_timestamp_ms/1000, 'unixepoch') AS ym"
+    if args.id is not None:
+        rows = execute(
+            f"SELECT id, message_id, message_type, file_name, r2_key, {ym} "
+            "FROM messages WHERE id = ?", [args.id])
+        if not rows:
+            sys.exit(f"no message with id {args.id}")
+    else:
+        where = f"WHERE message_type IN {_BINARY_TYPES}"
+        params: list = []
+        if args.since:
+            anchor = ("CAST(strftime('%s','now',?) AS INTEGER)"
+                      if args.since.startswith(("-", "+"))
+                      else "CAST(strftime('%s',?) AS INTEGER)")
+            where += f" AND line_timestamp_ms/1000 >= {anchor}"
+            params.append(args.since)
+        params.append(args.n)
+        rows = execute(
+            f"SELECT id, message_id, message_type, file_name, r2_key, {ym} "
+            f"FROM messages {where} ORDER BY id DESC LIMIT ?", params)
+        if not rows:
+            return []
+
+    token = load_line_token()
+    results = [_pull_one(r, token) for r in rows]
+
+    if args.open:
+        for r in results:
+            if r.get("path"):
+                subprocess.run(["open", r["path"]], check=False)
+    return results
+
+
 def cmd_sql(args):
     return execute(args.sql)
 
@@ -293,6 +460,20 @@ def main() -> None:
         help="only show rows where r2_key IS NULL (likely failed downloads)",
     )
     sp.set_defaults(fn=cmd_attachments)
+
+    sp = sub.add_parser(
+        "pull",
+        help="download binary content to the local media cache (LINE API → R2 fallback)",
+    )
+    sp.add_argument("id", type=int, nargs="?",
+                    help="DB id of one message; omit to bulk-pull a window")
+    sp.add_argument("--since",
+                    help="bulk mode: only rows on/after WHEN (e.g. '-7 days')")
+    sp.add_argument("-n", type=int, default=50,
+                    help="bulk mode: cap number of rows (default 50)")
+    sp.add_argument("--open", action="store_true",
+                    help="open each pulled file with the OS default app")
+    sp.set_defaults(fn=cmd_pull)
 
     sp = sub.add_parser("sql", help="raw SELECT (no params)")
     sp.add_argument("sql")
